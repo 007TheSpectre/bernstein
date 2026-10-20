@@ -32,6 +32,7 @@ The application is deployed on a local platform (see `infra/`):
 - a **multi-node** Kubernetes cluster (kind: 1 control-plane + 2 workers,
   `infra/kind-config.yaml`)
 - a **private Docker registry** with authentication (port 5000)
+- a **TCP forwarder** (port 16443) exposing the cluster API to the CI runner
 - the **ingress-nginx** controller (NodePort 30080)
 
 `infra/setup-local.sh` provisions all of it (idempotent). The same steps
@@ -74,10 +75,29 @@ pointing at a node IP, then open `http://poll.bernstein.local:30080`.
 ## CI
 
 Pushes to `main` trigger `.gitea/workflows/deploy.yml` on the self-hosted
-runner: it checks out the code and runs the same `deploy.sh`. The four
-credentials above are stored as Gitea Actions secrets
-(`REGISTRY_USER`, `REGISTRY_PASSWORD`, `POSTGRES_PASSWORD`,
-`REDIS_PASSWORD`).
+runner (stark-tower): it checks out the code and runs the same `deploy.sh`.
+
+The job runs in the `ubuntu-latest` runner image (the runner's docker
+strategy), which has everything the deploy needs: git, node, docker, and
+network access to the registry. kubectl is installed from the official
+releases, and it talks to the cluster through the port-16443 forwarder —
+the job's docker network cannot route to the kind node IPs directly.
+
+The credentials are stored as Gitea Actions secrets: `REGISTRY_USER`,
+`REGISTRY_PASSWORD`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and
+`KUBECONFIG_B64`. The last one is a base64'd kubeconfig for the local kind
+cluster (client certificates, `insecure-skip-tls-verify`, and the
+`__BRIDGE_IP__` placeholder that the workflow replaces with the docker
+bridge gateway at run time). If the cluster is recreated, regenerate it
+with:
+
+```sh
+kubectl config view --context kind-bernstein --flatten \
+  | sed 's|https://127.0.0.1:[0-9]\+|https://__BRIDGE_IP__:16443|;
+         s|    server: https://__BRIDGE_IP__:16443|    insecure-skip-tls-verify: true\n    server: https://__BRIDGE_IP__:16443|;
+         /certificate-authority-data/d' \
+  | base64 -w0
+```
 
 ## Updates without downtime
 

@@ -3,7 +3,8 @@
 # Provisions the local platform used to run the Poll application:
 #   1. a multi-node kubernetes cluster (kind: 1 control-plane + 2 workers)
 #   2. a private docker registry with authentication (port 5000)
-#   3. the ingress-nginx controller (NodePort 30080)
+#   3. a TCP forwarder exposing the cluster API to the CI runner (port 16443)
+#   4. the ingress-nginx controller (NodePort 30080)
 #
 # Idempotent: safe to re-run.
 #
@@ -39,7 +40,19 @@ docker run -d --name local-registry --restart unless-stopped \
   -e REGISTRY_AUTH_HTPASSWD_REALM="Poll Private Registry" \
   registry:2
 
-# --- 3. let the cluster talk to the registry -------------------------------
+# --- 3. expose the cluster API to the CI runner ---------------------------
+# CI jobs run in their own docker network, where the kind node IPs are not
+# routable (and the API port mapping is bound to loopback). A tiny socat
+# forwarder on the kind network publishes the API on the host instead, so
+# the CI kubeconfig (secret KUBECONFIG_B64) can point at <bridge-ip>:16443.
+echo "==> exposing the cluster API on :16443 for the CI runner"
+CP_IP="$(docker inspect "$CLUSTER-control-plane" -f '{{.NetworkSettings.Networks.kind.IPAddress}}')"
+docker rm -f k8s-api-proxy >/dev/null 2>&1 || true
+docker run -d --name k8s-api-proxy --restart unless-stopped \
+  --network kind -p 16443:6443 \
+  alpine/socat "TCP-LISTEN:6443,fork,reuseaddr TCP:$CP_IP:6443"
+
+# --- 4. let the cluster talk to the registry -------------------------------
 # kind nodes reach the host through the docker bridge gateway; the
 # containerd mirror config points localhost:5000 at it (see the kind docs,
 # "Using a Local Registry"). Two gotchas:
@@ -67,7 +80,7 @@ for node in $(kind get nodes --name "$CLUSTER"); do
   "
 done
 
-# --- 4. ingress controller -------------------------------------------------
+# --- 5. ingress controller -------------------------------------------------
 echo "==> installing ingress-nginx (NodePort $INGRESS_HTTP_PORT)"
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/null 2>&1 || true
 helm repo update >/dev/null 2>&1 || true

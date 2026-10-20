@@ -8,16 +8,39 @@ on:
 
 jobs:
   build-and-deploy:
-    runs-on: [self-hosted, linux]
+    runs-on: [ubuntu-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The runner image does not ship kubectl; install it from the official releases.
+      - name: Install kubectl
+        run: |
+          curl -sLO https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl
+          install -m 0755 kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      # Kubeconfig for the local kind cluster (secret KUBECONFIG_B64, see README).
+      # The API is reached through the socat forwarder (port 16443) published on
+      # the docker host, because the job container's network cannot route to the
+      # kind node IPs directly.
+      - name: Configure kubectl
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          BRIDGE_IP="$(docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}')"
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_B64" | base64 -d | sed "s|__BRIDGE_IP__|$BRIDGE_IP|g" > ~/.kube/config
+          kubectl get nodes
+
+      # The registry is on the docker host; from the job container it is reached
+      # through the bridge gateway IP (the kind nodes resolve localhost:5000 to
+      # the same address through their containerd mirror).
       - name: Build, push and deploy
         env:
-          REGISTRY_URL: localhost:5000
           REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-        run: ./deploy.sh
+        run: |
+          REGISTRY_URL="$(docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'):5000" ./deploy.sh
