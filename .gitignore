@@ -1,0 +1,9 @@
+# local platform state
+infra/registry/data/
+infra/registry/htpasswd
+
+# build artefacts
+worker/target/
+result/node_modules/
+poll/__pycache__/
+*.pyc

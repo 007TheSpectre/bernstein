@@ -1,0 +1,38 @@
+# Ingress exposes the two web apps to the outside.
+# We route by hostname (not by path) because the result app talks to
+# its browser over a websocket at /socket.io, which needs to live at
+# the root of the host.
+#
+# The ingress-nginx controller runs with a NodePort (30080) on the
+# local platform, so from the outside:
+#   curl --resolve poll.bernstein.local:30080:<node-ip> \
+#     http://poll.bernstein.local:30080/
+# (deploy.sh prints the exact commands at the end)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: poll
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: poll.bernstein.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: poll
+                port:
+                  number: 80
+    - host: result.bernstein.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: result
+                port:
+                  number: 80

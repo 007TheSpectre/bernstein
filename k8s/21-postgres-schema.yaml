@@ -1,0 +1,70 @@
+# schema.sql (from the application) is kept in a ConfigMap and applied
+# to the database by a one-shot Job. The Job waits for PostgreSQL to be
+# ready, so it can be applied right after the manifests without ordering
+# problems. The SQL is idempotent (IF NOT EXISTS), the Job is re-run by
+# deploy.sh on every deploy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-schema
+  namespace: poll
+data:
+  schema.sql: |
+    CREATE TABLE IF NOT EXISTS votes
+    (
+      id text PRIMARY KEY,
+      vote text NOT NULL
+    );
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-schema
+  namespace: poll
+  labels:
+    app: postgres-schema
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: postgres-schema
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: apply-schema
+          image: postgres:18
+          command:
+            - sh
+            - -c
+            - |
+              echo "waiting for postgres..."
+              until pg_isready -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t 3; do
+                sleep 3
+              done
+              psql "postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB" \
+                -v ON_ERROR_STOP=1 -f /schema/schema.sql
+              echo "schema applied"
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: postgres-db
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+      volumes:
+        - name: schema
+          configMap:
+            name: postgres-schema

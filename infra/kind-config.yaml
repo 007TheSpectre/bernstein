@@ -1,0 +1,9 @@
+# Multi-node local cluster for the Bernstein project.
+# 1 control-plane + 2 workers so we satisfy the "multi-node" requirement
+# and can demonstrate scheduling / rescheduling behaviour.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
