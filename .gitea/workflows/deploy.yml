@@ -33,14 +33,17 @@ jobs:
           echo "$KUBECONFIG_B64" | base64 -d | sed "s|__BRIDGE_IP__|$BRIDGE_IP|g" > ~/.kube/config
           kubectl get nodes
 
-      # The registry is on the docker host; from the job container it is reached
-      # through the bridge gateway IP (the kind nodes resolve localhost:5000 to
-      # the same address through their containerd mirror).
+      # The registry runs on the docker host. The docker CLI is in the job
+      # container, but all networking is done by the host daemon through the
+      # mounted socket, so the registry is reached at localhost:5000 (docker
+      # treats localhost as an insecure registry). The kind nodes cannot use
+      # localhost — their containerd mirror points localhost:5000 at the
+      # bridge gateway IP, where the same registry is listening.
       - name: Build, push and deploy
         env:
+          REGISTRY_URL: localhost:5000
           REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-        run: |
-          REGISTRY_URL="$(docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'):5000" ./deploy.sh
+        run: ./deploy.sh
