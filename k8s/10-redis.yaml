@@ -1,6 +1,24 @@
 # Redis holds the votes queue between poll and worker.
 # Auth is enabled (requirepass), the password comes from the
 # redis-credentials Secret (created by deploy.sh, see README).
+#
+# The queue is persisted on a PVC with AOF: if redis restarts, the
+# votes still waiting to be consumed are replayed instead of lost
+# (workers re-read them from the log).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: poll
+  labels:
+    app: redis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,6 +42,9 @@ spec:
           args:
             - --requirepass
             - $(REDIS_PASSWORD)
+            # AOF persistence for the votes queue (see the PVC above)
+            - --appendonly
+            - "yes"
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -33,6 +54,9 @@ spec:
           ports:
             - name: redis
               containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
           resources:
             requests:
               cpu: 64m
@@ -59,6 +83,10 @@ spec:
                 - redis-cli --no-auth-warning -a "${REDIS_PASSWORD}" ping | grep -q PONG
             initialDelaySeconds: 3
             periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: redis-data
 ---
 apiVersion: v1
 kind: Service

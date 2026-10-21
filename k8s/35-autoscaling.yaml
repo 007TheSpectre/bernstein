@@ -1,0 +1,51 @@
+# Autoscaling for the two web frontends, based on CPU utilization.
+# Requires the metrics server (installed by infra/setup-local.sh).
+#
+# The worker is on purpose NOT autoscaled here: it spends its time
+# blocked on BLPOP waiting for votes, so its CPU stays flat even when
+# the queue is busy. Scaling it should be driven by the queue depth
+# (e.g. KEDA), not by CPU — at the size of this project two replicas
+# are enough and it stays simple to operate.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: poll
+  namespace: poll
+  labels:
+    app: poll
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: poll
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: result
+  namespace: poll
+  labels:
+    app: result
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: result
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

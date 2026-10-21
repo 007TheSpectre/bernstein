@@ -5,6 +5,7 @@
 #   2. a private docker registry with authentication (port 5000)
 #   3. a TCP forwarder exposing the cluster API to the CI runner (port 16443)
 #   4. the ingress-nginx controller (NodePort 30080)
+#   5. the metrics server (for autoscaling and `kubectl top`)
 #
 # Idempotent: safe to re-run.
 #
@@ -89,6 +90,18 @@ helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
   --set controller.service.type=NodePort \
   --set controller.service.nodePorts.http="$INGRESS_HTTP_PORT" \
   --set controller.service.nodePorts.https=30443
+
+# --- 5. metrics server -------------------------------------------------------
+# Required for the HorizontalPodAutoscalers and for `kubectl top`.
+# The kind kubelets serve their metrics with a localhost-only
+# certificate, so the metrics server needs --kubelet-insecure-tls
+# (see the kind documentation).
+echo "==> installing the metrics server (needed for autoscaling)"
+helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server >/dev/null 2>&1 || true
+helm repo update >/dev/null 2>&1 || true
+helm upgrade --install metrics-server metrics-server/metrics-server \
+  -n kube-system --create-namespace \
+  --set args[0]=--kubelet-insecure-tls
 
 echo
 echo "Platform ready: cluster '$CLUSTER', private registry on :$REGISTRY_PORT, ingress on NodePort $INGRESS_HTTP_PORT."

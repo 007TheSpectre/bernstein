@@ -14,7 +14,7 @@
 #   REDIS_PASSWORD     redis password           (required)
 #   POSTGRES_USER      (default: poll)
 #   POSTGRES_DB        (default: poll)
-#   TAG                image tag                (default: latest)
+#   TAG                image tag                (default: git short sha)
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -26,7 +26,14 @@ POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set (see README
 REDIS_PASSWORD="${REDIS_PASSWORD:?REDIS_PASSWORD is not set (see README.md)}"
 POSTGRES_USER="${POSTGRES_USER:-poll}"
 POSTGRES_DB="${POSTGRES_DB:-poll}"
-TAG="${TAG:-latest}"
+# The image tag defaults to the short git sha of the commit being
+# deployed, so the images in the registry — and the ones running in
+# the cluster — are tied to the exact commit they were built from.
+# Override with TAG=... when needed; outside a git checkout it falls
+# back to "latest".
+if [ -z "${TAG:-}" ]; then
+  TAG=$(git rev-parse --short HEAD 2>/dev/null || echo latest)
+fi
 
 echo "==> building images (tag: $TAG)"
 docker build -t "$REGISTRY_URL/poll:$TAG" ./poll
@@ -60,11 +67,20 @@ kubectl create secret docker-registry registry-credentials -n poll \
   --docker-password="$REGISTRY_PASSWORD" \
   --dry-run=client -o yaml | kubectl apply -f -
 
+# The app manifests reference their images with the :latest tag as a
+# placeholder; at deploy time it is replaced with the tag computed
+# above, so the cluster always runs the exact commit that was built.
+# (redis/postgres are upstream images and keep their own versions.)
+apply_tagged() {
+  sed "s|image: \(localhost:5000/[a-z]*\):latest|image: \1:$TAG|" "$1" | kubectl apply -f -
+}
+
 kubectl apply -f k8s/10-redis.yaml
 kubectl apply -f k8s/20-postgres.yaml
-kubectl apply -f k8s/30-poll.yaml
-kubectl apply -f k8s/31-worker.yaml
-kubectl apply -f k8s/32-result.yaml
+apply_tagged k8s/30-poll.yaml
+apply_tagged k8s/31-worker.yaml
+apply_tagged k8s/32-result.yaml
+kubectl apply -f k8s/35-autoscaling.yaml
 
 echo "==> applying the database schema"
 # The ConfigMap is generated from schema.sql so the file stays the source
