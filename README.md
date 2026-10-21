@@ -14,7 +14,8 @@ poll --(RPUSH votes)--> redis --(BLPOP votes)--> worker --(UPSERT)--> postgres
 
 - **poll** (Python/Flask) — the voting page. Each vote is pushed as JSON onto
   the redis list `votes`.
-- **redis** — the queue between poll and worker.
+- **redis** — the queue between poll and worker. Persisted on a PVC
+  (AOF), so votes still waiting to be consumed survive a restart.
 - **worker** (Java) — pops votes from the queue and upserts them into
   PostgreSQL. Several replicas can run in parallel: `BLPOP` makes the queue
   the load balancer.
@@ -34,6 +35,7 @@ The application is deployed on a local platform (see `infra/`):
 - a **private Docker registry** with authentication (port 5000)
 - a **TCP forwarder** (port 16443) exposing the cluster API to the CI runner
 - the **ingress-nginx** controller (NodePort 30080)
+- the **metrics server** (for the autoscalers and `kubectl top`)
 
 `infra/setup-local.sh` provisions all of it (idempotent). The same steps
 apply to any real Kubernetes platform; only the registry address and the
@@ -52,6 +54,11 @@ export REDIS_PASSWORD=...       # password for redis
 `deploy.sh` builds the three images, pushes them to the registry, creates
 the Secrets, applies the manifests in `k8s/`, runs the schema Job and waits
 for the rollouts.
+
+The application images are tagged with the short git sha of the commit
+being deployed (`TAG` overrides it), so what runs in the cluster always
+matches an exact commit. The `redis` and `postgres` images are upstream
+images and keep their own versions.
 
 The passwords are never stored in the repository: they come from the
 environment (or from Gitea Actions secrets in CI) and are turned into the
@@ -101,15 +108,25 @@ kubectl config view --context kind-bernstein --flatten \
 
 ## Updates without downtime
 
-Every application runs as a Deployment with `maxUnavailable: 0`: a rolling
-update never removes the last ready replica, so the app keeps serving
-traffic while the new pods start. To update an application, change the code
-(or the image tag) and run `deploy.sh` again — or push to `main` and let
-CI do it.
+Every application runs as a Deployment with `maxUnavailable: 0`: a
+rolling update never removes the last ready replica, so the app keeps
+serving traffic while the new pods start. To update an application,
+change the code and run `deploy.sh` again — or push to `main` and let
+CI do it. Since images are tagged with the git sha, rolling back is a
+`git revert` followed by a push.
+
+## Scaling
+
+`poll` and `result` each have a HorizontalPodAutoscaler (2 to 5
+replicas, 70% average CPU), driven by the metrics server. The workers
+are on purpose not CPU-scaled: they spend their time blocked on `BLPOP`
+waiting for votes, so their CPU stays flat even when the queue is busy.
+Scale those manually (`kubectl scale deploy/worker -n poll
+--replicas=N`); scaling on the queue depth (e.g. with KEDA) is the next
+step.
 
 ## What's next
 
-- versioned image tags (git sha) instead of `latest`
-- autoscaling (HPA) for poll and result
-- redis persistence — votes still in the queue are lost when redis restarts
-- monitoring (metrics / prometheus)
+- metrics dashboards (Prometheus + Grafana)
+- autoscaling the workers on the queue depth (KEDA)
+- load testing the full pipeline
