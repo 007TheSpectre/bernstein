@@ -49,9 +49,11 @@ docker run -d --name local-registry --restart unless-stopped \
 echo "==> exposing the cluster API on :16443 for the CI runner"
 CP_IP="$(docker inspect "$CLUSTER-control-plane" -f '{{.NetworkSettings.Networks.kind.IPAddress}}')"
 docker rm -f k8s-api-proxy >/dev/null 2>&1 || true
+# socat needs the two addresses as separate arguments — one quoted string
+# makes it fail with "exactly 2 addresses required (there are 1)".
 docker run -d --name k8s-api-proxy --restart unless-stopped \
   --network kind -p 16443:6443 \
-  alpine/socat "TCP-LISTEN:6443,fork,reuseaddr TCP:$CP_IP:6443"
+  alpine/socat TCP-LISTEN:6443,fork,reuseaddr "TCP:$CP_IP:6443"
 
 # --- 4. let the cluster talk to the registry -------------------------------
 # kind nodes reach the host through the docker bridge gateway; the
