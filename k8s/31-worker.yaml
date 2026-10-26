@@ -60,13 +60,18 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: postgres-db
+            # Pin the heap explicitly: at cluster boot the JVM could not
+            # always trust the cgroup limit and got OOM-killed while
+            # loading classes. 384m heap + metaspace fits the limit.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xmx384m"
           resources:
             requests:
               cpu: 100m
               memory: 256Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 768Mi
           livenessProbe:
             httpGet:
               path: /healthz
